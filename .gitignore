@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+
+# Trained model weights and ONNX exports (re-train via train_*.py scripts)
+models/
+checkpoints/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+
+# Downloaded asset packs (re-fetch via download_assets.py) — large media files
+assets/
+*.fbx
+*.c4d
+*.rar
+*.7z
+*.tar.gz
+*.tgz
+*.glb
+*.gltf
+*.obj
+*.mtl
+*.wav
+*.mp3
+*.aif
+*.flac
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tiff
+*.bmp
+*.exr
+*.hdr
+
+# Reports / report sources (very large, FYP-internal)
+final_report_complete/
+final_report_src/
+report_src/
+final_zip_check/
+validate_demo/
+new entities/
+*.zip
+*.docx
+*.pdf
+
+# Generated demo artifacts and smoke tests
+demo_output.json
+validation_report.json
+_morph_tick_*.png
+_smoketest_*.png
+_entity3d_smoketest*.png
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.swp
+*.swo
