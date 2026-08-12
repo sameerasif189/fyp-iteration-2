@@ -355,6 +355,11 @@ class MusicGenRealtimeGen:
         return self._model is not None and self._processor is not None
 
     @property
+    def device(self) -> str | None:
+        """``cuda`` / ``cpu`` after load, else ``None``."""
+        return self._device
+
+    @property
     def last_load_error(self) -> str | None:
         return self._load_error
 
@@ -364,6 +369,38 @@ class MusicGenRealtimeGen:
         if self._init_thread is None:
             return False
         return self._init_thread.is_alive()
+
+    def wait_for_waveform(
+        self,
+        level: int,
+        audio_intensity: float,
+        dissonance: float,
+        seed: int,
+        *,
+        timeout_s: float = 180.0,
+        poll_s: float = 0.05,
+    ) -> np.ndarray | None:
+        """Enqueue on the dedicated GPU worker thread and block until a clip arrives.
+
+        Same path as ``gui_demo`` realtime generation (worker loop + CUDA), unlike
+        ``generate_now`` which runs on the *calling* thread.
+        """
+        if not self.available:
+            return None
+        # Drop any stale results so we only accept the job we enqueue next.
+        while self.poll_result() is not None:
+            pass
+        self.enqueue_replace(level, audio_intensity, dissonance, seed)
+        deadline = time.perf_counter() + float(max(1.0, timeout_s))
+        while time.perf_counter() < deadline:
+            result = self.poll_result()
+            if result is not None:
+                wave = result.get("wave")
+                if isinstance(wave, np.ndarray) and wave.size > 0:
+                    return wave
+            time.sleep(float(max(0.01, poll_s)))
+        print(f"[musicgen] wait_for_waveform timed out after {timeout_s:.0f}s (L{level})")
+        return None
 
     def enqueue_replace(self, level: int, audio_intensity: float, dissonance: float, seed: int) -> None:
         if not self.available:
