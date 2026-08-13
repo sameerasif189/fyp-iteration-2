@@ -20,6 +20,7 @@ import argparse
 import io
 import json
 import sys
+import threading
 import time
 import traceback
 import wave
@@ -97,9 +98,12 @@ class BridgeState:
         self.ready = False
         self.device: str = "cpu"
         self.gpu_name: str | None = None
+        self._gen_lock = threading.Lock()
+        self.cuda_snapshot: dict = {}
 
     def init_models(self) -> None:
         cuda = _cuda_info()
+        self.cuda_snapshot = cuda
         print(f"[bridge] CUDA available={cuda['cuda_available']} "
               f"gpu={cuda.get('gpu_name')} "
               f"vram_free={cuda.get('vram_free_gb')}GiB")
@@ -153,80 +157,105 @@ class BridgeState:
         seed: int,
         max_new_tokens: int | None = None,
     ) -> tuple[bytes, str, int]:
-        """Return (wav_bytes, source, sample_rate). Blocks until GPU (or fallback) done."""
-        self.busy = True
-        self.last_error = None
-        try:
-            level = int(max(0, min(5, level)))
-            intensity = float(np.clip(intensity, 0.0, 1.0))
-            dissonance = float(np.clip(dissonance, 0.0, 1.0))
-            seed = int(seed)
+        """Return (wav_bytes, source, sample_rate). Serializes on GPU lock (no 409)."""
+        with self._gen_lock:
+            self.busy = True
+            self.last_error = None
+            try:
+                level = int(max(0, min(5, level)))
+                intensity = float(np.clip(intensity, 0.0, 1.0))
+                dissonance = float(np.clip(dissonance, 0.0, 1.0))
+                seed = int(seed)
 
-            wave = None
-            source = "procedural"
-            sr = 16000
+                wave = None
+                source = "procedural"
+                sr = 16000
 
-            if self.musicgen is not None and self.musicgen.available:
-                # Match gui_demo: optional per-request token override on the model,
-                # then run on the dedicated CUDA worker thread.
-                if max_new_tokens is not None:
-                    self.musicgen.max_new_tokens = int(max(64, max_new_tokens))
+                if self.musicgen is not None and self.musicgen.available:
+                    if max_new_tokens is not None:
+                        self.musicgen.max_new_tokens = int(max(64, max_new_tokens))
 
-                print(
-                    f"[bridge] MusicGen GPU generate L{level} device={self.device} "
-                    f"intensity={intensity:.2f} dissonance={dissonance:.2f} "
-                    f"seed={seed} tokens={self.musicgen.max_new_tokens} ..."
-                )
-                t0 = time.perf_counter()
-                try:
-                    wave = self.musicgen.wait_for_waveform(
-                        level,
-                        intensity,
-                        dissonance,
-                        seed,
-                        timeout_s=self.generate_timeout_s,
+                    print(
+                        f"[bridge] MusicGen GPU generate L{level} device={self.device} "
+                        f"intensity={intensity:.2f} dissonance={dissonance:.2f} "
+                        f"seed={seed} tokens={self.musicgen.max_new_tokens} ..."
                     )
-                    if wave is not None and wave.size > 0:
-                        source = "musicgen"
-                        sr = int(self.musicgen.sample_rate)
-                        self.last_gen_s = time.perf_counter() - t0
-                        print(
-                            f"[bridge] MusicGen GPU done in {self.last_gen_s:.1f}s "
-                            f"samples={wave.size} sr={sr} device={self.device}"
+                    t0 = time.perf_counter()
+                    try:
+                        wave = self.musicgen.wait_for_waveform(
+                            level,
+                            intensity,
+                            dissonance,
+                            seed,
+                            timeout_s=self.generate_timeout_s,
                         )
-                except Exception as e:
-                    self.last_error = str(e)
-                    print(f"[bridge] MusicGen GPU failed, falling back to procedural: {e}")
-                    traceback.print_exc()
+                        if wave is not None and wave.size > 0:
+                            source = "musicgen"
+                            sr = int(self.musicgen.sample_rate)
+                            self.last_gen_s = time.perf_counter() - t0
+                            print(
+                                f"[bridge] MusicGen GPU done in {self.last_gen_s:.1f}s "
+                                f"samples={wave.size} sr={sr} device={self.device}"
+                            )
+                    except Exception as e:
+                        self.last_error = str(e)
+                        print(f"[bridge] MusicGen GPU failed, falling back to procedural: {e}")
+                        traceback.print_exc()
 
-            if wave is None or wave.size == 0:
-                print(f"[bridge] procedural generate L{level} seed={seed}")
-                wave = self.procedural.generate_clip(stress_level=level, seed=seed)
-                if wave is not None and wave.size > 0:
-                    reps = max(1, int(np.ceil(4.0 * 16000 / max(1, wave.size))))
-                    wave = np.tile(wave, reps)[: int(4.0 * 16000)]
-                    source = "procedural"
-                    sr = 16000
+                if wave is None or wave.size == 0:
+                    print(f"[bridge] procedural generate L{level} seed={seed}")
+                    wave = self.procedural.generate_clip(stress_level=level, seed=seed)
+                    if wave is not None and wave.size > 0:
+                        reps = max(1, int(np.ceil(4.0 * 16000 / max(1, wave.size))))
+                        wave = np.tile(wave, reps)[: int(4.0 * 16000)]
+                        source = "procedural"
+                        sr = 16000
 
-            if wave is None or wave.size == 0:
-                raise RuntimeError("Both MusicGen and procedural failed")
+                if wave is None or wave.size == 0:
+                    raise RuntimeError("Both MusicGen and procedural failed")
 
-            peak = float(np.max(np.abs(wave))) + 1e-8
-            if peak > 0.95:
-                wave = wave * (0.95 / peak)
+                peak = float(np.max(np.abs(wave))) + 1e-8
+                if peak > 0.95:
+                    wave = wave * (0.95 / peak)
 
-            wav_bytes = float_to_wav_bytes(wave, sr)
-            self.last_source = source
-            self.last_duration_s = float(wave.size / max(1, sr))
-            return wav_bytes, source, sr
-        finally:
-            self.busy = False
+                wav_bytes = float_to_wav_bytes(wave, sr)
+                self.last_source = source
+                self.last_duration_s = float(wave.size / max(1, sr))
+                return wav_bytes, source, sr
+            finally:
+                self.busy = False
 
 
 STATE: BridgeState | None = None
 
 
+def _peer_health_ok(host: str, port: int) -> bool:
+    import urllib.request
+    url = f"http://{host}:{port}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=2.0) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            return '"ok"' in body
+    except Exception:
+        return False
+
+
+def _port_taken(host: str, port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.4)
+        return sock.connect_ex((host, port)) == 0
+
+
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR lets a second MusicGen bind the same port and
+    # load a second GPU copy — clients then get curl error 52 empty replies.
+    allow_reuse_address = False
+
+
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, fmt: str, *args) -> None:
         sys.stderr.write("[http] " + (fmt % args) + "\n")
 
@@ -235,52 +264,65 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Connection", "close")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(raw)
+        self.wfile.flush()
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Connection", "close")
         self.end_headers()
 
     def do_GET(self) -> None:
-        assert STATE is not None
-        if self.path.startswith("/health"):
-            cuda = _cuda_info()
-            mg = STATE.musicgen
-            self._send_json(200, {
-                "ok": True,
-                "ready": STATE.ready,
-                "busy": STATE.busy,
-                "musicgen": bool(mg and mg.available),
-                "procedural": STATE.procedural.available,
-                "device": STATE.device if mg and mg.available else cuda.get("device"),
-                "gpu_name": STATE.gpu_name or cuda.get("gpu_name"),
-                "cuda_available": cuda.get("cuda_available"),
-                "vram_free_gb": cuda.get("vram_free_gb"),
-                "vram_total_gb": cuda.get("vram_total_gb"),
-                "last_error": STATE.last_error,
-                "last_source": STATE.last_source,
-                "last_duration_s": STATE.last_duration_s,
-                "last_gen_s": STATE.last_gen_s,
-                "model_path": str(STATE.model_path),
-                "max_new_tokens": STATE.max_new_tokens,
-            })
-            return
-        self._send_json(404, {"error": "not found"})
+        try:
+            if STATE is None:
+                self._send_json(503, {"ok": False, "error": "bridge not initialized"})
+                return
+            if self.path.startswith("/health"):
+                # Never touch torch.cuda here — concurrent CUDA from the HTTP
+                # thread while generate() runs yields empty TCP replies.
+                cuda = STATE.cuda_snapshot or {}
+                mg = STATE.musicgen
+                self._send_json(200, {
+                    "ok": True,
+                    "ready": STATE.ready,
+                    "busy": STATE.busy,
+                    "musicgen": bool(mg and mg.available),
+                    "procedural": STATE.procedural.available,
+                    "device": STATE.device if mg and mg.available else cuda.get("device"),
+                    "gpu_name": STATE.gpu_name or cuda.get("gpu_name"),
+                    "cuda_available": cuda.get("cuda_available"),
+                    "vram_free_gb": cuda.get("vram_free_gb"),
+                    "vram_total_gb": cuda.get("vram_total_gb"),
+                    "last_error": STATE.last_error,
+                    "last_source": STATE.last_source,
+                    "last_duration_s": STATE.last_duration_s,
+                    "last_gen_s": STATE.last_gen_s,
+                    "model_path": str(STATE.model_path),
+                    "max_new_tokens": STATE.max_new_tokens,
+                })
+                return
+            self._send_json(404, {"ok": False, "error": "not found"})
+        except Exception as e:
+            traceback.print_exc()
+            try:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            except Exception:
+                pass
 
     def do_POST(self) -> None:
-        assert STATE is not None
-        if not self.path.startswith("/generate"):
-            self._send_json(404, {"error": "not found"})
-            return
-        if STATE.busy:
-            self._send_json(409, {"error": "busy generating"})
-            return
         try:
+            if STATE is None:
+                self._send_json(503, {"ok": False, "error": "bridge not initialized"})
+                return
+            if not self.path.startswith("/generate"):
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b"{}"
             data = json.loads(body.decode("utf-8") or "{}")
@@ -297,6 +339,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(wav_bytes)))
+            self.send_header("Connection", "close")
             self.send_header("X-Audio-Source", source)
             self.send_header("X-Sample-Rate", str(sr))
             self.send_header("X-Duration-S", f"{STATE.last_duration_s:.3f}")
@@ -307,9 +350,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(wav_bytes)
+            self.wfile.flush()
         except Exception as e:
             traceback.print_exc()
-            self._send_json(500, {"error": str(e)})
+            try:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            except Exception:
+                pass
 
 
 def main() -> None:
@@ -349,6 +396,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if _peer_health_ok(args.host, args.port):
+        print(f"[bridge] already serving http://{args.host}:{args.port} — exiting")
+        sys.exit(0)
+    if _port_taken(args.host, args.port):
+        print(
+            f"[bridge] port {args.port} is open but /health returns empty. "
+            "A stuck duplicate is likely bound. Kill python on that port and retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     model_path = Path(args.model)
     if not model_path.exists():
         print(f"[bridge] model path missing: {model_path}", file=sys.stderr)
@@ -363,7 +421,11 @@ def main() -> None:
     )
     STATE.init_models()
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    try:
+        server = ExclusiveHTTPServer((args.host, args.port), Handler)
+    except OSError as e:
+        print(f"[bridge] could not bind {args.host}:{args.port}: {e}", file=sys.stderr)
+        sys.exit(1)
     print(f"[bridge] listening on http://{args.host}:{args.port} device={STATE.device}")
     print("[bridge] POST /generate  GET /health")
     try:

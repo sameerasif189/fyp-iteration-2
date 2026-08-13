@@ -22,14 +22,29 @@ import numpy as np
 NUM_STRESS_LEVELS = 6
 
 # Base prompts: horror *sound design* beds — avoid orchestral score / song language (model skews musical).
-# L0--L3 are single prompts; L4 and L5 are pools of distinct setting variants
-# so consecutive renders sound noticeably different instead of converging on a
-# single "horror smear". A seed picks one variant per render in build_musicgen_prompt.
+# Each level is a pool of distinct variants so seeds explore different textures
+# (creature / eerie / industrial / organic) instead of converging on screech-only beds.
 LEVEL_PROMPTS: dict[int, list[str]] = {
     0: [
         (
             "barely audible abandoned building air and duct rumble faint voltage hum dusty room tone "
             "very slow infra sub drift no rhythm no tonal center documentary horror ambience field recording"
+        ),
+        (
+            "empty attic midnight: soft wood settle moth wings against glass far traffic wash "
+            "refrigerator compressor ghost through floors dry plaster dust no melody no percussion"
+        ),
+        (
+            "coastal foghorn far away muffled rain on corrugated metal low tide suction "
+            "cable hum through wet sand almost silence long gaps no music no voice"
+        ),
+        (
+            "hospital basement standby power: soft transformer tick fluorescent starter click "
+            "distant laundry machines through concrete sterile air no score no chords"
+        ),
+        (
+            "quiet museum after closing: floorboard tick display case glass rattle HVAC whisper "
+            "far elevator cable hum empty gallery air no music"
         ),
     ],
     1: [
@@ -37,22 +52,72 @@ LEVEL_PROMPTS: dict[int, list[str]] = {
             "empty corridor narrow wind cavity distant dripping water metal pings off concrete "
             "radio static washes irregular floor creaks creeping dread pure sound design no melody no chords"
         ),
+        (
+            "locked school after hours: locker metal ticks fluorescent buzz dying "
+            "footsteps that stop mid-hall pipe knock behind walls no melody no vocals"
+        ),
+        (
+            "underground parking: car alarm echo dying tire squeal far away "
+            "concrete drip HVAC roar intermittent door slam soft no rhythm no song"
+        ),
+        (
+            "old radio room: dial static sweeps Morse-like clicks not language "
+            "vacuum tube warm hiss cabinet wood creak no tune no vocal"
+        ),
+        (
+            "foggy marsh boardwalk: soft water lap reed rustle distant frog croak warped "
+            "wood plank creak under unseen weight eerie calm no music"
+        ),
     ],
     2: [
         (
             "pressure in the ears low mechanical whirr broken fluorescent buzz steam pipe knock "
             "granular hiss layers uncomfortable close-mic friction arrhythmic micro-scares no percussion groove"
         ),
+        (
+            "elevator shaft stuck between floors: cable groan counterweight scrape "
+            "emergency light flicker buzz distant floor call bell warped no melody"
+        ),
+        (
+            "storm hitting greenhouse: glass flex cracks rain needles wind through vents "
+            "hanging pots collide irregularly soil drip no orchestral pad"
+        ),
+        (
+            "server room brownout: fan stalls HDD thrash relay chatter "
+            "UPS alarm chirp decaying into hum heat shimmer noise no beat"
+        ),
+        (
+            "something moving in the walls: soft claw scrape behind plaster muffled breath not human "
+            "pipes tick like footsteps stopping when you listen eerie stalking presence no screech"
+        ),
     ],
     3: [
         (
-            "tightening dread bandpass rising reversed metal shriek distant boiler rumble "
-            "irregular sloppy pulse not a heartbeat distorted groan biomechanical wet resonance "
-            "no melody no human voices"
+            "tightening dread: distant creature footfalls on wet concrete low guttural breath not human "
+            "metal locker shudder boiler rumble wet resonance building pressure no melody no human voices"
+        ),
+        (
+            "meat locker failure: compressor death rattle frost crack hanging hooks sway "
+            "plastic sheeting flap wet tile echo no choir no scream vocals"
+        ),
+        (
+            "subway tunnel maintenance: rail ping far train pressure wave "
+            "rat scratch gravel grit pneumatic hiss warning horn decay no drum loop"
+        ),
+        (
+            "chemical plant leak: valve scream steam plume metal expansion pops "
+            "alarm Klaxon slowed and broken liquid slap no musical theme"
+        ),
+        (
+            "stalking predator nearby: heavy slow claws on stone low animal growl under floorboards "
+            "wet snout sniffing air bone click jaw no continuous screech no human scream no music"
+        ),
+        (
+            "eerie abandoned chapel: wind through broken stained glass pew creak "
+            "distant bell rope slap candle wax drip unsettling silence gaps no choir no organ melody"
         ),
     ],
-    # Level 4 -- ~6 distinct horror "settings". Each is a complete sound design
-    # bed without any musical scoring. No human voices, no screams, no choir.
+    # Level 4 -- diverse horror settings: creature / eerie / industrial / organic (not screech-only)
     4: [
         (
             "abandoned industrial basement: metal stress groans concrete dust drifts heavy steel doors "
@@ -63,8 +128,8 @@ LEVEL_PROMPTS: dict[int, list[str]] = {
             "hissing through ruptured seams electrical arcing pops sub-bass hull creak no song no human voices"
         ),
         (
-            "decaying carcass cavity: thick wet biology squelches gristle separation dry chitin clatter "
-            "swarming insect chittering rib-cage resonance no melody no human screaming no choir"
+            "monster in the dark: thick wet biology squelches gristle separation dry chitin clatter "
+            "creature throat rumble insect swarm chitter rib-cage resonance no continuous ear-screech no human scream"
         ),
         (
             "flooded sewer with rusted machinery: dripping echo through tile and brick distorted reverb "
@@ -72,16 +137,22 @@ LEVEL_PROMPTS: dict[int, list[str]] = {
         ),
         (
             "haunted forest at midnight: cracking branches under unseen weight wind through dead leaves "
-            "owl calls warped through distance distant unidentified animal growl no melody no human cries"
+            "owl calls warped distant unidentified animal growl soft howl far away no melody no human cries"
         ),
         (
             "ruined power plant: transformer surges concrete dust falling crystallized metal stress "
             "intermittent klaxon decay copper whine fluorescent ballast crackle no drum kit no song"
         ),
+        (
+            "creature nest chamber: layered breathing of many unseen animals membrane stretch "
+            "bone rattle claw drag across metal eggshell crackle low hive drone no piercing screech loop"
+        ),
+        (
+            "eerie fog graveyard: cold wind through iron fence chains soft soil shift "
+            "distant church bell warped crow call stone lid scrape no scream bed no music"
+        ),
     ],
-    # Level 5 -- 6 distinct catastrophic horror beds. Maximum density without
-    # tipping into musical score. Diversity is the point: explosion, collapse,
-    # alien hive, hellish furnace, etc.
+    # Level 5 -- catastrophic / monster / collapse diversity (avoid pure screech beds)
     5: [
         (
             "structural collapse: concrete shearing rebar snapping under enormous load dust avalanche "
@@ -93,32 +164,40 @@ LEVEL_PROMPTS: dict[int, list[str]] = {
         ),
         (
             "alien hive interior: layered wet chitin scrape distant mass of organisms breathing in unison "
-            "fluid pulse through membrane walls dry crystalline crack no choir no song no melody"
+            "fluid pulse through membrane walls dry crystalline crack creature mass movement no choir no song"
         ),
         (
             "violent storm against ruined structure: torrential rain on corrugated metal sheet lightning "
             "thunderclap window glass blowing in concrete dust whipped by wind no orchestra no human voices"
         ),
         (
-            "deep cavern with creature: enormous reverb tail crushing footsteps subterranean rock fall "
-            "thick wet grunt distant reverberant snarl gravel and bone underfoot no song no music no vocals"
+            "deep cavern with giant creature: enormous reverb crushing footsteps subterranean rock fall "
+            "thick wet grunt distant reverberant snarl gravel and bone underfoot no endless screech no song"
         ),
         (
             "warzone rubble at dusk: distant explosion concussions debris settling structural fires crackling "
             "drone of damaged engines metal twisting pure documentary sound effects no theme music no choir"
         ),
+        (
+            "monster hunt closing in: multiple predator footfalls stampede wet jaws snap "
+            "territorial roar bursts then silence then closer breath no continuous high screech no human scream"
+        ),
+        (
+            "apocalyptic swarm: insectile mass wings and claws on metal walls hive mind pulse "
+            "organic tunnel collapse ichor drip low frequency terror bed varied textures not one tone scream"
+        ),
     ],
 }
 
 
-# Anti-music + anti-vocal anchor appended every render. The vocal clauses are
-# important because MusicGen's training data is heavy on songs, and without
-# explicit suppression it tends to emit human cries (which we explicitly do not
-# want — the demo is environmental horror, not human suffering).
+# Anti-music + anti-human-vocal anchor. Creature / monster SFX are allowed;
+# we still block song structure and human screaming/choir (MusicGen training bias).
 _HORROR_SOUND_DESIGN_ANCHOR = (
     "absolutely not a song: no catchy melody no chord progression no groovy drums no orchestral score. "
-    "no human voices no female voices no male voices no screaming no crying no moaning no whispering "
+    "no human voices no female voices no male voices no human screaming no crying no moaning no whispering "
     "no choir no singing no chanting no spoken word. "
+    "creature and environmental horror sound effects are allowed: growls snarls breath footsteps bone metal. "
+    "vary textures — do not produce only continuous high-pitched screech. "
     "harsh gritty documentary horror sound design bed, atonal, arrhythmic, mono-compatible, rumble-forward mix"
 )
 
@@ -174,25 +253,49 @@ def build_musicgen_prompt(
         extra.append("keep level low uneasy space between events no tonal hook no melodic instrument")
     elif lvl == 3:
         extra.append(
-            "building physical pressure midrange grime stinging highs no melodic solo no tonal hook"
+            "building physical pressure creature presence possible midrange grime "
+            "stinging highs sparingly — prefer growls breath footsteps over continuous screech; no melodic solo"
         )
     elif lvl == 4:
-        # Deliberately phrased to push MusicGen away from "intense music" and
-        # toward sound-effects collage. The model otherwise loves orchestral pads.
         extra.append(
-            "pure environmental horror sound effects: extreme transient violence "
-            "smeared distorted bandwidth crushing lows ear-fatigue noise. "
-            "this is not a music track, no theme, no rhythmic loop, no drum hits, no bassline"
+            "pure environmental and creature horror sound effects: impacts metal wet biology "
+            "monster movement eerie wind. vary the palette — growls snarls bone industrial rumble. "
+            "avoid making only a continuous high screech. not a music track, no theme, no drum loop"
         )
     else:
         extra.append(
-            "unrelenting harsh noise-floor brutality visceral disgusting textures "
-            "apocalyptic abrasion. this is not music, never resolves like a soundtrack theme, "
-            "no rhythmic groove, no drone-melody, no chord pad"
+            "unrelenting catastrophic and monster horror: collapse furnace hive predator hunt. "
+            "multiple textures layered — roar footfall debris breath — not a single screech tone. "
+            "this is not music, never resolves like a soundtrack theme, no rhythmic groove, no chord pad"
         )
 
+    # Seeded micro-tags so consecutive gens diverge even within the same level variant.
+    flavor_tags = (
+        "close-mic detail",
+        "far reverberant space",
+        "sub-bass weight",
+        "dry dusty air",
+        "wet organic texture",
+        "metallic resonance",
+        "sudden silence gaps",
+        "slow stalking pace",
+        "swarming micro-movement",
+        "eerie hollow tone",
+    )
+    extra.append(flavor_tags[int(seed) % len(flavor_tags)])
+    if lvl >= 4:
+        monster_tags = (
+            "low creature growl accents",
+            "heavy non-human footsteps",
+            "chitin and bone clutter",
+            "predatory breath nearby",
+            "hive membrane pulse",
+            "distant monstrous roar then quiet",
+        )
+        extra.append(monster_tags[int(seed // 7) % len(monster_tags)])
+
     if eff_ai > 0.58 + 0.06 * max(0, lvl - 3):
-        extra.append("punishing loud bursts of destruction impacts and ripping distortion strips")
+        extra.append("punishing loud bursts of destruction impacts tearing and distortion strips")
     if eff_dis > 0.52 + 0.06 * max(0, lvl - 3):
         extra.append(
             "sickening atonal scrape microtonal drift phasey ugly harmonics granular crackle "
