@@ -17,7 +17,8 @@ checkpoints/
 *.bin
 
 # Downloaded asset packs (re-fetch via download_assets.py) — large media files
-assets/
+# (assets/* rather than assets/, so the curated audio below can be re-included)
+assets/*
 *.fbx
 *.c4d
 *.rar
@@ -66,3 +67,10 @@ desktop.ini
 *.log
 *.swp
 *.swo
+
+# Curated audio the Unity game plays at runtime (user-curated per stress level, 26 Sep 2026). Tracked so a fresh clone
+# plays out of the box and removed clips are removed everywhere. Must stay after the media rules above.
+!assets/audio/
+!assets/audio/**
+!assets/entity_audio/
+!assets/entity_audio/**
